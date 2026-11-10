@@ -1,0 +1,288 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>JWTデコーダー＆クレーム検証ツール</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<style>
+  pre { white-space: pre-wrap; word-break: break-all; }
+  .jwt-header { color: #f97316; }
+  .jwt-payload { color: #a78bfa; }
+  .jwt-sig { color: #34d399; }
+  .dot { color: #9ca3af; }
+</style>
+</head>
+<body class="bg-gray-950 text-gray-100 min-h-screen">
+<div class="max-w-5xl mx-auto p-4 py-8">
+  <h1 class="text-3xl font-bold text-center mb-2 text-purple-400">JWT デコーダー＆クレーム検証ツール</h1>
+  <p class="text-center text-gray-400 text-sm mb-8">JWTトークンを分解・クレーム解析・有効期限チェック</p>
+
+  <!-- 入力エリア -->
+  <div class="bg-gray-900 rounded-xl p-5 mb-5 border border-gray-700">
+    <label class="block text-sm font-semibold text-gray-300 mb-2">JWTトークンを貼り付け</label>
+    <textarea id="jwtInput" class="w-full bg-gray-800 border border-gray-600 rounded-lg p-3 text-white text-sm font-mono resize-none focus:outline-none focus:border-purple-500" rows="5" placeholder="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyfQ.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c"></textarea>
+    <div class="flex gap-3 mt-3 flex-wrap">
+      <button onclick="decodeJWT()" class="bg-purple-600 hover:bg-purple-500 text-white font-bold py-2 px-6 rounded-lg transition">デコードする</button>
+      <button onclick="loadSample('hs256')" class="bg-gray-700 hover:bg-gray-600 text-white font-bold py-2 px-4 rounded-lg transition text-sm">HS256サンプル</button>
+      <button onclick="loadSample('rs256')" class="bg-gray-700 hover:bg-gray-600 text-white font-bold py-2 px-4 rounded-lg transition text-sm">RS256サンプル（有効期限切れ）</button>
+      <button onclick="loadSample('future')" class="bg-gray-700 hover:bg-gray-600 text-white font-bold py-2 px-4 rounded-lg transition text-sm">有効期限未来</button>
+    </div>
+  </div>
+
+  <!-- トークン色分け表示 -->
+  <div id="colorized" class="hidden bg-gray-900 rounded-xl p-4 mb-5 border border-gray-700">
+    <p class="text-xs text-gray-400 mb-2 font-semibold">トークン構造（色分け）</p>
+    <div id="colorizedText" class="font-mono text-sm break-all leading-7"></div>
+    <div class="flex gap-4 mt-2 text-xs text-gray-400">
+      <span><span class="text-orange-400 font-bold">■</span> ヘッダー</span>
+      <span><span class="text-purple-400 font-bold">■</span> ペイロード</span>
+      <span><span class="text-emerald-400 font-bold">■</span> 署名</span>
+    </div>
+  </div>
+
+  <!-- 3パネル -->
+  <div id="panels" class="hidden grid grid-cols-1 lg:grid-cols-3 gap-4 mb-5">
+    <!-- ヘッダー -->
+    <div class="bg-gray-900 border border-orange-900/50 rounded-xl p-4">
+      <h2 class="text-orange-400 font-bold text-sm mb-3 flex items-center gap-2">
+        <span class="w-2 h-2 rounded-full bg-orange-400"></span>ヘッダー (Header)
+      </h2>
+      <pre id="headerJson" class="text-xs text-orange-200 bg-gray-800 rounded p-2"></pre>
+      <div id="algInfo" class="mt-2 text-xs text-gray-400"></div>
+    </div>
+    <!-- ペイロード -->
+    <div class="bg-gray-900 border border-purple-900/50 rounded-xl p-4">
+      <h2 class="text-purple-400 font-bold text-sm mb-3 flex items-center gap-2">
+        <span class="w-2 h-2 rounded-full bg-purple-400"></span>ペイロード (Payload)
+      </h2>
+      <pre id="payloadJson" class="text-xs text-purple-200 bg-gray-800 rounded p-2"></pre>
+    </div>
+    <!-- 署名 -->
+    <div class="bg-gray-900 border border-emerald-900/50 rounded-xl p-4">
+      <h2 class="text-emerald-400 font-bold text-sm mb-3 flex items-center gap-2">
+        <span class="w-2 h-2 rounded-full bg-emerald-400"></span>署名 (Signature)
+      </h2>
+      <div id="sigInfo" class="text-xs text-emerald-200 break-all bg-gray-800 rounded p-2"></div>
+    </div>
+  </div>
+
+  <!-- 標準クレーム一覧 -->
+  <div id="claimsTable" class="hidden bg-gray-900 rounded-xl p-5 mb-5 border border-gray-700">
+    <h2 class="font-bold text-blue-400 mb-4">標準クレーム（RFC 7519）</h2>
+    <div id="claimsRows" class="space-y-2"></div>
+  </div>
+
+  <!-- 署名検証 (RS256/ES256) -->
+  <div id="sigVerifySection" class="hidden bg-gray-900 rounded-xl p-5 mb-5 border border-gray-700">
+    <h2 class="font-bold text-yellow-400 mb-3">署名検証（RS256 / ES256）</h2>
+    <p class="text-xs text-gray-400 mb-3">PEM形式の公開鍵を貼り付けると Web Crypto API で署名を検証します</p>
+    <textarea id="pubkeyInput" class="w-full bg-gray-800 border border-gray-600 rounded p-2 text-xs font-mono text-white resize-none focus:outline-none focus:border-yellow-500 mb-3" rows="6" placeholder="-----BEGIN PUBLIC KEY-----&#10;MIIBIjANBgkq...&#10;-----END PUBLIC KEY-----"></textarea>
+    <div class="flex gap-3 items-center">
+      <button onclick="verifySig()" class="bg-yellow-600 hover:bg-yellow-500 text-black font-bold py-2 px-5 rounded-lg transition text-sm">署名を検証する</button>
+      <span id="verifyResult" class="text-sm font-bold"></span>
+    </div>
+  </div>
+
+  <!-- エラー表示 -->
+  <div id="errorArea" class="hidden bg-red-950 border border-red-700 rounded-xl p-4 text-red-300 text-sm"></div>
+</div>
+
+<script>
+const escHtml = s => String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+const SAMPLES = {
+  hs256: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJ1c2VyXzEyMyIsIm5hbWUiOiLlsbHnlKjlhYMiLCJyb2xlIjoiYWRtaW4iLCJpc3MiOiJodHRwczovL2V4YW1wbGUuY29tIiwiYXVkIjoiaHR0cHM6Ly9hcGkuZXhhbXBsZS5jb20iLCJpYXQiOjE3MzIyNzI0MDAsImV4cCI6MTc2MzgwODQwMCwibmJmIjoxNzMyMjcyNDAwfQ.S8Vl9Q2XJzMnPfKwRtYbDqHcNuEoAkIlZpWrGdFsXvY',
+  rs256: 'eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCIsImtpZCI6InJzYS0wMDEifQ.eyJzdWIiOiJ1c2VyXzQ1NiIsIm5hbWUiOiLlsbHnlKjlhYMiLCJpc3MiOiJodHRwczovL2F1dGguZXhhbXBsZS5jb20iLCJhdWQiOiJteS1hcHAiLCJpYXQiOjE2MDA2OTEyMDAsImV4cCI6MTYwMDY5NDgwMCwibmJmIjoxNjAwNjkxMjAwfQ.SIGNATURE_NOT_VERIFIED',
+  future: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJ1c2VyXzc4OSIsIm5hbWUiOiLlsbHoqY3lhYMiLCJpc3MiOiJodHRwczovL2V4YW1wbGUuY29tIiwiYXVkIjpbIndlYiIsIm1vYmlsZSJdLCJpYXQiOjE3MzIyNzI0MDAsImV4cCI6MTg5NTI2NDAwMCwibmJmIjoxNzMyMjcyNDAwfQ.HMAC_SIG',
+};
+
+let currentHeader = null, currentPayload = null, currentParts = null;
+
+function loadSample(type) {
+  document.getElementById('jwtInput').value = SAMPLES[type];
+  decodeJWT();
+}
+
+function base64urlDecode(str) {
+  str = str.replace(/-/g, '+').replace(/_/g, '/');
+  while (str.length % 4) str += '=';
+  return atob(str);
+}
+
+function base64urlToUint8Array(str) {
+  const b = base64urlDecode(str);
+  const arr = new Uint8Array(b.length);
+  for (let i = 0; i < b.length; i++) arr[i] = b.charCodeAt(i);
+  return arr;
+}
+
+function formatDate(ts) {
+  const d = new Date(ts * 1000);
+  return d.toLocaleString('ja-JP', {timeZone: 'Asia/Tokyo'}) + ' JST';
+}
+
+function formatExpiry(ts) {
+  const now = Math.floor(Date.now() / 1000);
+  const diff = ts - now;
+  if (diff < 0) {
+    const ago = -diff;
+    if (ago < 3600) return `<span class="text-red-400 font-bold">期限切れ（${Math.floor(ago/60)}分前）</span>`;
+    if (ago < 86400) return `<span class="text-red-400 font-bold">期限切れ（${Math.floor(ago/3600)}時間前）</span>`;
+    return `<span class="text-red-400 font-bold">期限切れ（${Math.floor(ago/86400)}日前）</span>`;
+  } else {
+    if (diff < 300) return `<span class="text-yellow-400 font-bold">残り${diff}秒（まもなく期限切れ）</span>`;
+    if (diff < 3600) return `<span class="text-green-400">残り${Math.floor(diff/60)}分</span>`;
+    if (diff < 86400) return `<span class="text-green-400">残り${Math.floor(diff/3600)}時間${Math.floor((diff%3600)/60)}分</span>`;
+    return `<span class="text-green-400">残り${Math.floor(diff/86400)}日</span>`;
+  }
+}
+
+function decodeJWT() {
+  const token = document.getElementById('jwtInput').value.trim();
+  const errorArea = document.getElementById('errorArea');
+  errorArea.classList.add('hidden');
+
+  const parts = token.split('.');
+  if (parts.length !== 3) {
+    errorArea.textContent = 'JWTの形式が不正です（ヘッダー.ペイロード.署名 の3パーツが必要）';
+    errorArea.classList.remove('hidden');
+    ['colorized','panels','claimsTable','sigVerifySection'].forEach(id => document.getElementById(id).classList.add('hidden'));
+    return;
+  }
+
+  let header, payload;
+  try {
+    header = JSON.parse(base64urlDecode(parts[0]));
+    payload = JSON.parse(base64urlDecode(parts[1]));
+  } catch(e) {
+    errorArea.textContent = 'デコードエラー: ' + e.message;
+    errorArea.classList.remove('hidden');
+    return;
+  }
+
+  currentHeader = header; currentPayload = payload; currentParts = parts;
+
+  // 色分け表示
+  document.getElementById('colorizedText').innerHTML =
+    `<span class="jwt-header">${parts[0]}</span><span class="dot">.</span><span class="jwt-payload">${parts[1]}</span><span class="dot">.</span><span class="jwt-sig">${parts[2]}</span>`;
+  document.getElementById('colorized').classList.remove('hidden');
+
+  // ヘッダー
+  document.getElementById('headerJson').textContent = JSON.stringify(header, null, 2);
+  const algDescs = { HS256:'HMAC-SHA256（対称鍵）', HS384:'HMAC-SHA384（対称鍵）', HS512:'HMAC-SHA512（対称鍵）', RS256:'RSA-SHA256（非対称）', RS384:'RSA-SHA384（非対称）', RS512:'RSA-SHA512（非対称）', ES256:'ECDSA-SHA256（非対称）', ES384:'ECDSA-SHA384（非対称）', ES512:'ECDSA-SHA512（非対称）', PS256:'RSASSA-PSS-SHA256' };
+  const algDesc = algDescs[header.alg] || header.alg || '不明';
+  document.getElementById('algInfo').innerHTML = `<span class="bg-orange-900/50 text-orange-300 rounded px-2 py-0.5 text-xs">${escHtml(algDesc)}</span>${header.kid ? `<span class="ml-2 text-gray-400 text-xs">kid: ${escHtml(header.kid)}</span>` : ''}`;
+
+  // ペイロード
+  document.getElementById('payloadJson').textContent = JSON.stringify(payload, null, 2);
+
+  // 署名
+  document.getElementById('sigInfo').innerHTML = `<span class="break-all">${parts[2]}</span><div class="mt-2 text-gray-400">長さ: ${parts[2].length}文字 / ~${Math.floor(parts[2].length * 0.75)} bytes</div>`;
+
+  // パネル表示
+  document.getElementById('panels').classList.remove('hidden');
+
+  // 標準クレーム
+  const claimDefs = {
+    iss: ['発行者 (iss)', 'このトークンを発行したサービスのURI'],
+    sub: ['サブジェクト (sub)', 'トークンの主体（ユーザーID等）'],
+    aud: ['受信者 (aud)', 'このトークンの受信対象'],
+    exp: ['有効期限 (exp)', 'この時刻以降はトークン無効'],
+    nbf: ['有効開始 (nbf)', 'この時刻以前はトークン無効'],
+    iat: ['発行時刻 (iat)', 'トークンが発行された時刻'],
+    jti: ['JWT ID (jti)', 'トークンの一意識別子（リプレイ攻撃防止）'],
+  };
+
+  const rows = [];
+  for (const [key, [label, desc]] of Object.entries(claimDefs)) {
+    if (!(key in payload)) continue;
+    const val = payload[key];
+    let display = '';
+    if (key === 'exp') {
+      display = `${formatDate(val)}<br><span class="text-sm">${formatExpiry(val)}</span>`;
+    } else if (key === 'iat' || key === 'nbf') {
+      display = `${formatDate(val)}<span class="text-gray-500 text-xs ml-2">(Unix: ${val})</span>`;
+    } else if (Array.isArray(val)) {
+      display = `<span class="text-cyan-300">${val.join(', ')}</span>`;
+    } else {
+      display = `<span class="text-cyan-300">${val}</span>`;
+    }
+    rows.push(`<div class="bg-gray-800 rounded-lg p-3 grid grid-cols-1 sm:grid-cols-4 gap-1 text-sm">
+      <div class="text-blue-300 font-semibold">${label}</div>
+      <div class="text-gray-400 text-xs sm:text-sm col-span-1">${desc}</div>
+      <div class="sm:col-span-2">${display}</div>
+    </div>`);
+  }
+
+  // カスタムクレーム
+  const stdKeys = new Set(Object.keys(claimDefs));
+  const customClaims = Object.entries(payload).filter(([k]) => !stdKeys.has(k));
+  if (customClaims.length > 0) {
+    rows.push(`<div class="mt-3 mb-1 text-xs font-semibold text-gray-400">カスタムクレーム</div>`);
+    for (const [k, v] of customClaims) {
+      rows.push(`<div class="bg-gray-800 rounded-lg p-3 grid grid-cols-1 sm:grid-cols-4 gap-1 text-sm">
+        <div class="text-cyan-300 font-semibold font-mono">${k}</div>
+        <div class="text-gray-400 text-xs">カスタムクレーム</div>
+        <div class="sm:col-span-2 text-white break-all">${JSON.stringify(v)}</div>
+      </div>`);
+    }
+  }
+
+  document.getElementById('claimsRows').innerHTML = rows.join('');
+  document.getElementById('claimsTable').classList.remove('hidden');
+
+  // RS256/ES256の場合は署名検証セクション表示
+  const isAsymmetric = ['RS256','RS384','RS512','ES256','ES384','ES512','PS256'].includes(header.alg);
+  if (isAsymmetric) {
+    document.getElementById('sigVerifySection').classList.remove('hidden');
+  } else {
+    document.getElementById('sigVerifySection').classList.add('hidden');
+  }
+  document.getElementById('verifyResult').textContent = '';
+}
+
+async function verifySig() {
+  const pubkeyPem = document.getElementById('pubkeyInput').value.trim();
+  const result = document.getElementById('verifyResult');
+  if (!pubkeyPem || !currentParts) {
+    result.textContent = '公開鍵またはJWTがありません'; result.className = 'text-sm font-bold text-red-400';
+    return;
+  }
+
+  try {
+    const alg = currentHeader.alg;
+    const pemBody = pubkeyPem.replace(/-----BEGIN PUBLIC KEY-----|-----END PUBLIC KEY-----|\n/g, '');
+    const derBytes = Uint8Array.from(atob(pemBody), c => c.charCodeAt(0));
+
+    let cryptoAlg, importAlg;
+    if (alg.startsWith('RS')) {
+      const hashBits = alg === 'RS256' ? 'SHA-256' : alg === 'RS384' ? 'SHA-384' : 'SHA-512';
+      cryptoAlg = { name: 'RSASSA-PKCS1-v1_5', hash: hashBits };
+      importAlg = { name: 'RSASSA-PKCS1-v1_5', hash: hashBits };
+    } else if (alg.startsWith('ES')) {
+      const named = alg === 'ES256' ? 'P-256' : alg === 'ES384' ? 'P-384' : 'P-521';
+      const hashBits = alg === 'ES256' ? 'SHA-256' : alg === 'ES384' ? 'SHA-384' : 'SHA-512';
+      cryptoAlg = { name: 'ECDSA', hash: hashBits };
+      importAlg = { name: 'ECDSA', namedCurve: named };
+    } else {
+      result.textContent = `${alg} の署名検証は未対応（HS系は対称鍵のため）`; result.className = 'text-sm font-bold text-yellow-400';
+      return;
+    }
+
+    const pubKey = await crypto.subtle.importKey('spki', derBytes, importAlg, false, ['verify']);
+    const signedPart = new TextEncoder().encode(currentParts[0] + '.' + currentParts[1]);
+    const sigBytes = base64urlToUint8Array(currentParts[2]);
+    const valid = await crypto.subtle.verify(cryptoAlg, pubKey, sigBytes, signedPart);
+
+    if (valid) {
+      result.textContent = '✓ 署名検証成功（有効な署名）'; result.className = 'text-sm font-bold text-green-400';
+    } else {
+      result.textContent = '✗ 署名検証失敗（無効な署名）'; result.className = 'text-sm font-bold text-red-400';
+    }
+  } catch(e) {
+    result.textContent = 'エラー: ' + e.message; result.className = 'text-sm font-bold text-red-400';
+  }
+}
+</script>
+</body>
+</html>
